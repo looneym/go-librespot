@@ -650,6 +650,11 @@ func (p *AppPlayer) handleApiRequest(ctx context.Context, req ApiRequest) (any, 
 			return nil, fmt.Errorf("failed loading context: %w", err)
 		}
 
+		// Local play activates this device just like a Connect transfer. Notify
+		// stream consumers too, including controllers that reconnected while
+		// this device was already active, so they can start draining the output.
+		p.app.server.Emit(&ApiEvent{Type: ApiEventTypeActive})
+
 		if data.Position > 0 {
 			if err := p.seek(ctx, data.Position); err != nil {
 				p.app.log.WithError(err).Warnf("failed seeking to initial position %dms", data.Position)
