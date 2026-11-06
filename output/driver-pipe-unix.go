@@ -39,12 +39,9 @@ func newPipeOutput(opts *NewOutputOptions) (out *pipeOutput, err error) {
 		return nil, fmt.Errorf("failed to open fifo: %w", err)
 	}
 
-	if !opts.OutputPipeWaitForReader {
-		// Restore blocking mode now that we are sure we have a reader.
-		if err := syscall.SetNonblock(int(out.file.Fd()), false); err != nil {
-			return nil, fmt.Errorf("failed to set blocking mode on fifo: %w", err)
-		}
-	}
+	// Keep Go's pollable descriptor: Write still waits for backpressure, but
+	// Close can interrupt it. Calling Fd/SetNonblock(false) would turn that
+	// wait into an uninterruptible blocking syscall.
 
 	go out.outputLoop()
 

@@ -77,6 +77,7 @@ func newPipeTransform(format string) (func([]float32, []byte) int, error) {
 }
 
 func (out *pipeOutput) outputLoop() {
+	defer out.file.Close()
 	floats := make([]float32, 4*1024)
 	bytes := make([]byte, 4*len(floats)) // times four is the biggest we can get
 
@@ -107,7 +108,15 @@ func (out *pipeOutput) outputLoop() {
 
 		if n > 0 {
 			nn := out.transform(floats[:n], bytes)
+			// Backpressure is normal when a consumer pauses or disconnects.
+			// Never hold the control lock while waiting for it to drain.
+			out.lock.Unlock()
 			_, err := out.file.Write(bytes[:nn])
+			out.lock.Lock()
+			if out.closed {
+				out.lock.Unlock()
+				break
+			}
 			if err != nil {
 				out.err <- err
 				out.closed = true
@@ -172,7 +181,9 @@ func (out *pipeOutput) SetVolume(vol float32) {
 		panic(fmt.Sprintf("invalid volume value: %0.2f", vol))
 	}
 
+	out.lock.Lock()
 	out.volume = vol
+	out.lock.Unlock()
 	sendVolumeUpdate(out.volumeUpdate, vol)
 }
 
@@ -183,16 +194,19 @@ func (out *pipeOutput) Error() <-chan error {
 
 func (out *pipeOutput) Close() error {
 	out.lock.Lock()
-	defer out.lock.Unlock()
 
 	if out.closed {
+		out.lock.Unlock()
 		return nil
 	}
 
-	_ = out.file.Close()
-
 	out.closed = true
 	out.cond.Signal()
+	out.lock.Unlock()
+
+	// Closing a pollable pipe interrupts an outstanding Write. Close outside
+	// the control lock so the writer can observe closed and exit.
+	_ = out.file.Close()
 
 	return nil
 }
